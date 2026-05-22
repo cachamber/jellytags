@@ -19,11 +19,12 @@ JellyTags is a lightweight, responsive web application for managing tags within 
 - **Sorting & Filtering:** Find specific media quickly using the built-in search bar and sorting dropdown.
 
 ## Requirements
+- Node.js 20.19+ (or 22.12+).
 - A [Jellyfin](https://jellyfin.org/) server.
 - An API Token from your Jellyfin server with **Administrator** privileges (needed to fetch the admin user's library context and update items).
 
 ## Running via Docker (Recommended)
-You can easily spin up the JellyTags interface using Docker and Docker Compose. Environment variables are substituted at runtime.
+You can easily spin up the JellyTags interface using Docker and Docker Compose. Jellyfin credentials stay server-side and are never injected into browser JavaScript.
 
 ### 1. Create a `docker-compose.yml`
 Create a `docker-compose.yml` file anywhere on your server, or clone this repository and modify the existing one.
@@ -37,8 +38,8 @@ services:
     ports:
       - "8181:80"
     environment:
-      - VITE_JELLYFIN_URL=http://your-jellyfin-server-ip:8096
-      - VITE_JELLYFIN_TOKEN=your_admin_api_token
+      - JELLYFIN_URL=http://your-jellyfin-server-ip:8096
+      - JELLYFIN_TOKEN=your_admin_api_token
 ```
 
 ### 2. Start the container
@@ -57,6 +58,12 @@ cd jellytags
 ```
 
 ### 2. Install dependencies
+If you use `nvm`, run:
+```bash
+nvm install
+nvm use
+```
+
 ```bash
 npm install
 ```
@@ -64,14 +71,18 @@ npm install
 ### 3. Environment Variables
 To run JellyTags locally, create a `.env` file at the root of the project:
 ```env
-VITE_JELLYFIN_URL=http://localhost:8096
-VITE_JELLYFIN_TOKEN=your_admin_api_token
+JELLYFIN_URL=http://localhost:8096
+JELLYFIN_TOKEN=your_admin_api_token
 ```
 
 ### 4. Start the Development Server
 ```bash
 npm run dev
 ```
+
+This starts both:
+- the frontend on `http://localhost:8181`
+- the local API proxy on `http://localhost:8090`
 
 ## Support / Sponsor
 If you found this tool useful, consider buying me a coffee!

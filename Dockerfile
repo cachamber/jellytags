@@ -10,20 +10,23 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# Production stage using Nginx
-FROM nginx:1.31-alpine3.23
+# Production stage using Node runtime
+FROM node:20-alpine
+
+WORKDIR /app
 
 # Patch OS packages in runtime image
 RUN apk upgrade --no-cache
 
-# Copy built assets
-COPY --from=build /app/dist /usr/share/nginx/html
+# Install only runtime dependencies
+COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Copy entrypoint script
-COPY docker-entrypoint.sh /
-RUN chmod +x /docker-entrypoint.sh
+# Copy built frontend and server proxy
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/backend/server.mjs ./src/backend/server.mjs
 
 # Expose port 80
 EXPOSE 80
 
-CMD ["/docker-entrypoint.sh"]
+CMD ["node", "src/backend/server.mjs"]

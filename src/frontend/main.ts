@@ -1,34 +1,64 @@
-import { Jellyfin } from '@jellyfin/sdk';
-import { getItemsApi } from '@jellyfin/sdk/lib/utils/api/items-api';
-import { getItemUpdateApi } from '@jellyfin/sdk/lib/utils/api/item-update-api';
-import { getSystemApi } from '@jellyfin/sdk/lib/utils/api/system-api';
-import { getUserApi } from '@jellyfin/sdk/lib/utils/api/user-api';
-import { getUserViewsApi } from '@jellyfin/sdk/lib/utils/api/user-views-api';
-import { BaseItemKind, ItemFields } from '@jellyfin/sdk/lib/generated-client/models';
+const API_BASE = '/api';
 
-// 1. Initialize SDK
-const jellyfin = new Jellyfin({
-    clientInfo: { name: 'JellyTags', version: '1.0.0' },
-    deviceInfo: { name: 'Browser', id: 'browser-uuid' }
-});
+type ItemsQuery = {
+    userId?: string;
+    parentId?: string;
+    recursive?: boolean;
+    includeItemTypes?: string[];
+    fields?: string[];
+    ids?: string[];
+};
 
-const serverUrl = import.meta.env.VITE_JELLYFIN_URL;
-const token = import.meta.env.VITE_JELLYFIN_TOKEN;
+type ItemsResponse = {
+    Items?: MediaItem[];
+};
 
-const api = jellyfin.createApi(serverUrl);
-api.accessToken = token;
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(`${API_BASE}${path}`, {
+        headers: {
+            'Content-Type': 'application/json',
+            ...(init?.headers || {})
+        },
+        ...init
+    });
 
-const itemsApi = getItemsApi(api);
-const updateApi = getItemUpdateApi(api);
-const systemApi = getSystemApi(api);
-const userApi = getUserApi(api);
-const userViewsApi = getUserViewsApi(api);
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`API ${res.status}: ${errText || 'Request failed'}`);
+    }
+
+    if (res.status === 204) {
+        return undefined as T;
+    }
+
+    return res.json() as Promise<T>;
+}
+
+function buildItemsQueryString(query: ItemsQuery): string {
+    const params = new URLSearchParams();
+
+    if (query.userId) params.set('userId', query.userId);
+    if (query.parentId) params.set('parentId', query.parentId);
+    if (typeof query.recursive === 'boolean') params.set('recursive', String(query.recursive));
+    if (query.includeItemTypes?.length) params.set('includeItemTypes', query.includeItemTypes.join(','));
+    if (query.fields?.length) params.set('fields', query.fields.join(','));
+    if (query.ids?.length) params.set('ids', query.ids.join(','));
+
+    return params.toString();
+}
+
+function getItems(query: ItemsQuery): Promise<ItemsResponse> {
+    const qs = buildItemsQueryString(query);
+    return apiRequest<ItemsResponse>(`/items${qs ? `?${qs}` : ''}`);
+}
 
 type MediaItem = {
     Id: string;
     Name?: string;
     Type?: string;
     Tags?: string[];
+    Genres?: string[];
+    ProviderIds?: Record<string, string>;
     DateCreated?: string;
     OfficialRating?: string | null;
     CustomRating?: string | null;
@@ -82,18 +112,18 @@ sidebarOverlay?.addEventListener('click', closeSidebar);
 // 3. Core Logic
 async function init() {
     try {
-        await systemApi.getPublicSystemInfo();
+        await apiRequest('/system/public-info');
 
-        const usersRes = await userApi.getUsers();
-        if (!usersRes.data || usersRes.data.length === 0) {
-            throw new Error("No users found. Ensure your API Token has admin permissions.");
+        const usersRes = await apiRequest<Array<{ Id?: string }>>('/users');
+        if (!usersRes || usersRes.length === 0) {
+            throw new Error('No users found. Ensure your API token has admin permissions.');
         }
 
-        currentUserId = usersRes.data[0].Id as string;
+        currentUserId = usersRes[0].Id as string;
 
         await fetchItems();
     } catch (e) {
-        loadingEl.innerHTML = `<h3 class="error-message">Connection Failed. Check your .env file and ensure the Jellyfin server is running.</h3>`;
+        loadingEl.innerHTML = `<h3 class="error-message">Connection failed. Check server logs and Jellyfin settings.</h3>`;
     }
 }
 
@@ -102,8 +132,8 @@ async function fetchItems() {
     gridEl.style.display = 'none';
 
     try {
-        const viewsRes = await userViewsApi.getUserViews({ userId: currentUserId });
-        const views = (viewsRes.data.Items || []).filter(v => v.Id && v.Name);
+        const viewsRes = await apiRequest<{ Items?: MediaItem[] }>(`/users/${currentUserId}/views`);
+        const views = (viewsRes.Items || []).filter(v => v.Id && v.Name);
 
         sourceLibraries = views.map(v => ({
             id: v.Id as string,
@@ -114,28 +144,28 @@ async function fetchItems() {
         const allItemsById = new Map<string, MediaItem>();
 
         if (sourceLibraries.length === 0) {
-            const fallbackRes = await itemsApi.getItems({
+            const fallbackRes = await getItems({
                 userId: currentUserId,
                 recursive: true,
-                includeItemTypes: [BaseItemKind.Movie, BaseItemKind.Series] as BaseItemKind[],
-                fields: [ItemFields.Tags, ItemFields.DateCreated] as ItemFields[]
+                includeItemTypes: ['Movie', 'Series'],
+                fields: ['Tags', 'DateCreated', 'OfficialRating']
             });
 
-            (fallbackRes.data.Items || []).forEach(item => {
+            (fallbackRes.Items || []).forEach(item => {
                 if (!item.Id) return;
                 allItemsById.set(item.Id, item as MediaItem);
             });
         } else {
             const libraryItemResults = await Promise.all(sourceLibraries.map(async (library) => {
-                const res = await itemsApi.getItems({
+                const res = await getItems({
                     userId: currentUserId,
                     parentId: library.id,
                     recursive: true,
-                    includeItemTypes: [BaseItemKind.Movie, BaseItemKind.Series] as BaseItemKind[],
-                    fields: [ItemFields.Tags, ItemFields.DateCreated] as ItemFields[]
+                    includeItemTypes: ['Movie', 'Series'],
+                    fields: ['Tags', 'DateCreated', 'OfficialRating']
                 });
 
-                return (res.data.Items || []).map(item => ({
+                return (res.Items || []).map(item => ({
                     ...(item as MediaItem),
                     SourceLibraryId: library.id,
                     SourceLibraryName: library.name
@@ -213,7 +243,7 @@ function renderGrid(itemsToRender: MediaItem[]) {
 
         let imgHtml = `<div class="media-no-image">No Image</div>`;
         if (item.ImageTags && item.ImageTags.Primary) {
-            const imageUrl = `${serverUrl}/Items/${item.Id}/Images/Primary?tag=${item.ImageTags.Primary}&maxWidth=400`;
+            const imageUrl = `${API_BASE}/items/${item.Id}/images/primary?tag=${encodeURIComponent(item.ImageTags.Primary)}&maxWidth=400`;
             imgHtml = `<img src="${imageUrl}" class="media-image" loading="lazy" />`;
         }
 
@@ -400,7 +430,7 @@ function renderSidebarEditor(tagCounts: Record<string, number>) {
                 ${selectedItems.map(item => {
         let thumbHtml = `<div class="selected-item-thumb-placeholder">${item.Type === 'Movie' ? 'M' : 'S'}</div>`;
         if (item.ImageTags && item.ImageTags.Primary) {
-            const thumbUrl = `${serverUrl}/Items/${item.Id}/Images/Primary?tag=${item.ImageTags.Primary}&maxWidth=80`;
+            const thumbUrl = `${API_BASE}/items/${item.Id}/images/primary?tag=${encodeURIComponent(item.ImageTags.Primary)}&maxWidth=80`;
             thumbHtml = `<img src="${thumbUrl}" class="selected-item-thumb-img" />`;
         }
         return `
@@ -486,27 +516,27 @@ function renderSidebarEditor(tagCounts: Record<string, number>) {
 
                 try {
                     const localItem = allItems.find(i => i.Id === id);
-                    const itemRes = await itemsApi.getItems({
+                    const itemRes = await getItems({
                         ids: [id],
                         userId: currentUserId,
                         fields: [
-                            ItemFields.Tags,
-                            ItemFields.Genres,
-                            ItemFields.Overview,
-                            ItemFields.ProviderIds,
-                            ItemFields.Studios,
-                            ItemFields.People,
-                            ItemFields.Taglines,
-                            ItemFields.ProductionLocations,
-                            ItemFields.OriginalTitle,
-                            ItemFields.SortName,
-                            ItemFields.CustomRating,
-                            ItemFields.DateCreated,
-                            ItemFields.RemoteTrailers,
-                            ItemFields.ExternalUrls,
-                        ] as ItemFields[]
+                            'Tags',
+                            'Genres',
+                            'Overview',
+                            'ProviderIds',
+                            'Studios',
+                            'People',
+                            'Taglines',
+                            'ProductionLocations',
+                            'OriginalTitle',
+                            'SortName',
+                            'CustomRating',
+                            'DateCreated',
+                            'RemoteTrailers',
+                            'ExternalUrls',
+                        ]
                     });
-                    const serverItem = itemRes.data.Items?.[0];
+                    const serverItem = itemRes.Items?.[0];
                     if (!serverItem) {
                         throw new Error(`Item ${id} not found on server.`);
                     }
@@ -523,16 +553,16 @@ function renderSidebarEditor(tagCounts: Record<string, number>) {
                             ? currentTags.filter((tag: string) => !proposedTags.includes(tag))
                             : [...proposedTags];
 
-                    await updateApi.updateItem({
-                        itemId: id,
-                        baseItemDto: {
+                    await apiRequest(`/items/${id}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({
                             ...serverItem,
                             Id: id,
                             Name: itemName,
                             Tags: updatedTags,
                             Genres: serverItem.Genres || [],
                             ProviderIds: serverItem.ProviderIds || {}
-                        }
+                        })
                     });
 
                     if (localItem) localItem.Tags = [...updatedTags];
